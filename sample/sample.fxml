@@ -15,14 +15,14 @@
     <padding> <Insets top = "10" right = "10" bottom = "10" left = "10"/> </padding>
 
     <Label text="Key (8 characters each): " GridPane.columnIndex="0" GridPane.rowIndex="0"/>
-    <TextField text="" GridPane.columnIndex="1" GridPane.rowIndex="0" fx:id="keyField1" minWidth="120"/>
-    <TextField text="" GridPane.columnIndex="1" GridPane.rowIndex="1" fx:id="keyField2"/>
-    <TextField text="" GridPane.columnIndex="1" GridPane.rowIndex="2" fx:id="keyField3"/>
-    <TextField text="" GridPane.columnIndex="1" GridPane.rowIndex="3" fx:id="keyField4"/>
+    <TextField text="meowmeow" GridPane.columnIndex="1" GridPane.rowIndex="0" fx:id="keyField1" minWidth="120"/>
+    <TextField text="meowmeow" GridPane.columnIndex="1" GridPane.rowIndex="1" fx:id="keyField2"/>
+    <TextField text="meowmeow" GridPane.columnIndex="1" GridPane.rowIndex="2" fx:id="keyField3"/>
+    <TextField text="meowmeow" GridPane.columnIndex="1" GridPane.rowIndex="3" fx:id="keyField4"/>
 
     <Label text="Tweak (8 characters each): " GridPane.columnIndex="0" GridPane.rowIndex="4"/>
-    <TextField text="" GridPane.columnIndex="1" GridPane.rowIndex="4" fx:id="tweakField1"/>
-    <TextField text="" GridPane.columnIndex="1" GridPane.rowIndex="5" fx:id="tweakField2"/>
+    <TextField text="meowmeow" GridPane.columnIndex="1" GridPane.rowIndex="4" fx:id="tweakField1"/>
+    <TextField text="meowmeow" GridPane.columnIndex="1" GridPane.rowIndex="5" fx:id="tweakField2"/>
 
     <HBox GridPane.columnIndex="0" GridPane.rowIndex="6">
         <Label text="File Path: " />

@@ -82,10 +82,10 @@ public class Controller {
         //
         long blockSize = 256 / 8;
         long remainder = numBytes % blockSize;
-        long padding = blockSize - remainder;
-        long numBlocks = numBytes / blockSize + 1;
+        long padding = (blockSize - remainder) % blockSize;
+        long numBlocks = (numBytes + padding) / blockSize;
 
-        System.out.println("Padding: " + padding);
+        System.out.println("Padding: " + (int)padding);
         long C[] = new long[4];
         // We generate a random block as the first block, but
         // for the first 8 bytes, we store a long telling us
@@ -108,7 +108,7 @@ public class Controller {
 
         try (
                 FileInputStream fr = new FileInputStream(f.getAbsolutePath());
-                FileOutputStream fo = new FileOutputStream(f.getAbsoluteFile() + ".encry");
+                FileOutputStream fo = new FileOutputStream(f.getParent() + "/encry_" + f.getName())
         ) {
 
 
@@ -192,8 +192,7 @@ public class Controller {
 
         try (
                 FileInputStream fr = new FileInputStream(f.getAbsolutePath());
-                FileOutputStream fo = new FileOutputStream(f.getAbsolutePath() + ".decry");
-                FileOutputStream fo2 = new FileOutputStream(f.getParent() + "/out.txt")
+                FileOutputStream fo = new FileOutputStream(f.getParent() + "/decrypt_" + f.getName())
         ) {
 
             int i, j;
@@ -206,7 +205,7 @@ public class Controller {
             C = bytesToLong(curBlock);
             P = cipher.decrypt(C);
 
-            int padding = (int)P[0] - 4 * 8;
+            int padding = ((int)P[0] - 4 * 8) % 32;
             System.out.println("Padding: " + padding);
 
             // So decrypt the next block and ignore the first (padding) bytes!
@@ -219,9 +218,8 @@ public class Controller {
             for (i = 0; i < 4; i++)
                 P[i] = curBlockLong[i] ^ C[i];
             PBytes = longToBytes(P);
-            for (i = (int)padding; i < 32; i++) {
+            for (i = padding; i < 32; i++) {
                 fo.write(PBytes[i]);
-                fo2.write(PBytes[i]);
             }
 
             // Now we can write the rest as normal;
@@ -239,7 +237,6 @@ public class Controller {
                     P[j] = curBlockLong[j] ^ C[j];
 
                 fo.write(longToBytes(P));
-                fo2.write(longToBytes(P));
             }
 
         } catch (Exception e) {
