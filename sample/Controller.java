@@ -1,32 +1,29 @@
 package sample;
 
+import cipher.Encryptor;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import cipher.ThreeFish256;
+import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
-import javafx.scene.text.Text;
+import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.FileWriter;
+import java.io.*;
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
-import java.util.Random;
+import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class Controller {
-
-    // Will get initialized when we encrypt or decrypt.
-    //
-    ThreeFish256 cipher;
 
     @FXML
     Button encryptBtn;
@@ -58,195 +55,292 @@ public class Controller {
     @FXML
     TextField pathField;
 
+    @FXML
+    ChoiceBox<String> choiceBox;
+
+    @FXML
+    Label keyLabel;
+
+    private ExecutorService executorService;
+
+    // Before we create a thread, make sure we are not
+    // already operating on this file.
+    //
+    private ArrayList<String> paths;
+
+    public void initialize() {
+
+        // Allow 5 threads to run at a time.
+        //
+        executorService = Executors.newFixedThreadPool(5);
+        paths = new ArrayList<>(10);
+
+        choiceBox.getSelectionModel().selectedIndexProperty().addListener(
+                (e, old, n) -> {
+                    if (n.intValue() == 0) {
+                        keyLabel.setText("Key (8 characters each): ");
+                        keyField1.setText("meowmeow");
+                        keyField2.setText("meowmeow");
+                        keyField3.setText("meowmeow");
+                        keyField4.setText("meowmeow");
+                    }
+                    else if (n.intValue() == 1) {
+                        keyLabel.setText("Key (16 characters each): ");
+                        keyField1.setText("meowmeowmeowmeow");
+                        keyField2.setText("meowmeowmeowmeow");
+                        keyField3.setText("meowmeowmeowmeow");
+                        keyField4.setText("meowmeowmeowmeow");
+                    }
+                    else {
+                        keyLabel.setText("Key (32 characters each): ");
+                        keyField1.setText("meowmeowmeowmeowmeowmeowmeowmeow");
+                        keyField2.setText("meowmeowmeowmeowmeowmeowmeowmeow");
+                        keyField3.setText("meowmeowmeowmeowmeowmeowmeowmeow");
+                        keyField4.setText("meowmeowmeowmeowmeowmeowmeowmeow");
+                    }
+                }
+        );
+    }
+
     @FXML public void encryptHandler() {
 
-        System.out.println("Encrypting...");
+        File fin = getPath();
+        File fout = new File(fin.getParent() + "/encry_" + fin.getName());
 
-        File f = getPath();
-        long[] key = getKey();
-        long[] tweak = getTweak();
+        if (fin.isFile())
+            encryptFile(fin, fout);
+        else if (fin.isDirectory())
+            encryptDir(fin);
+    }
 
-        if (f == null || key == null || tweak == null)
-            return; // Bad input, just stop.
+    private void encryptDir(File fin) {
 
+        Path parent = fin.toPath();
+        String getEncryptedParent =
+                parent.getParent().toAbsolutePath().toString() + "\\encry_" +
+                        parent.getFileName().toString();
 
-        Random rand = new Random(System.currentTimeMillis());
+        executorService.execute(
+            new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Files.walkFileTree(parent,
+                                new FileVisitor<Path>() {
+                                    @Override
+                                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
 
-        cipher = new ThreeFish256(key, tweak);
+                                        String path = parent.relativize(dir).toString();
+                                        System.out.println("File path before: " + path);
+                                        path = path.replaceAll("\\\\", "\\\\encry_");
 
-        // Are we a multiple of 256 / 8 bytes?
-        //
-        long numBytes = f.length();
+                                        if (path.equals(""))
+                                            path = getEncryptedParent;
+                                        else
+                                            path = getEncryptedParent + "\\encry_" + path;
+                                        //System.out.println("File path after: " + getEncryptedParent + "\\" + path);
 
-        // block size, in bytes!
-        //
-        long blockSize = 256 / 8;
-        long remainder = numBytes % blockSize;
-        long padding = (blockSize - remainder) % blockSize;
-        long numBlocks = (numBytes + padding) / blockSize;
+                                        Path p = Paths.get(path);
+                                        Files.createDirectory(p);
+                                        //System.out.println(dir.toString());
+                                        return FileVisitResult.CONTINUE;
+                                    }
 
-        System.out.println("Padding: " + (int)padding);
-        long C[] = new long[4];
-        // We generate a random block as the first block, but
-        // for the first 8 bytes, we store a long telling us
-        // how many bytes to throw out. including the first
-        // block and the extra padding for the next block.
-        //
-        if (remainder == 0)
-            // Okay, no extra padding.
-            C[0] = 4 * 8; // each long in first block is 8 bytes.
-        else {
+                                    @Override
+                                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
 
-            C[0] = 4 * 8 + padding;
+                                        Path rel = parent.relativize(file);
 
-            // Fill up rest of first block.
-            for (int i = 1; i < 4; i++)
-                C[i] = rand.nextLong();
-        }
+                                        String pathOut = "encry_" + rel.toString().replaceAll("\\\\", "\\\\encry_");
+                                        pathOut = getEncryptedParent + "\\" + pathOut;
 
-        byte curBlock[] = new byte[(int)blockSize];
+                                        File fout = new File(pathOut);
 
-        try (
-                FileInputStream fr = new FileInputStream(f.getAbsolutePath());
-                FileOutputStream fo = new FileOutputStream(f.getParent() + "/encry_" + f.getName())
-        ) {
+                                        encryptFile(file.toFile(), fout);
+                                        return FileVisitResult.CONTINUE;
+                                    }
 
+                                    @Override
+                                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                                        return FileVisitResult.CONTINUE;
+                                    }
 
-            // Okay, we can start reading the file... block at a time, starting with
-            // first special block, then we'll add padding next, then we proceed
-            // as normal.
-            //
-            C = cipher.encrypt(C);
+                                    @Override
+                                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                                        return FileVisitResult.CONTINUE;
+                                    }
+                                }
+                        );
+                    } catch (Exception e) {
 
-            fo.write(longToBytes(C));
-
-            // Padding...
-            int i, j;
-            for (i = 0; i < (int)padding; i++)
-                curBlock[i] = (byte) (i + 1);
-            for (j = i; j < 32; j++)
-                curBlock[j] = (byte)fr.read();
-
-            long P[] = bytesToLong(curBlock);
-            // CBC mode!
-            //
-            for (i = 0; i < 4; i++) {
-                C[i] = P[i] ^ C[i];
-            }
-            C = cipher.encrypt(C);
-
-            fo.write(longToBytes(C));
-
-            // Now do the rest;
-            for (i = 1; i < numBlocks; i++) {
-                for (j = 0; j < 4 * 8; j++) {
-                    curBlock[j] = (byte) fr.read();
+                    }
                 }
-
-                // XOR with previously encrypted block
-                //
-                P = bytesToLong(curBlock);
-                for (j = 0; j < 4; j++)
-                    P[j] ^= C[j];
-
-                // Encrypt it now!
-                C = cipher.encrypt(P);
-
-                // Write it out!
-                //
-                fo.write(longToBytes(C));
             }
+        );
+    }
 
+    private void encryptFile(File fin, File fout) {
 
-        } catch (Exception e) {
-            errMsg("Error reading file or writing file!\n" + e.toString());
-        }
+        executorService.execute(
+                new Runnable() {
+                    @Override
+                    public void run() {
 
+                        if (paths.contains(fin.getPath())) {
+                            System.err.println("already working on file: " + fin.getPath());
+                            return;
+                        }
+                        else
+                            paths.add(fin.getPath());
+
+                        System.out.println("Encrypting... " + fin.getName());
+
+                        try {
+                            DataInputStream fr = new DataInputStream(new FileInputStream(fin));
+                            DataOutputStream fw = new DataOutputStream(new FileOutputStream(fout));
+
+                            Encryptor encryptor = new Encryptor(getKey(), getTweak(), getBlockSize());
+                            encryptor.encryptHandler(fr, fw, fin.length());
+
+                            fr.close();
+                            fw.close();
+
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            System.out.println(e);
+                            return;
+                        }
+
+                        System.out.println("Encrypted! " + fin.getName());
+                        paths.remove(fin.getPath());
+                    }
+                });
     }
 
     @FXML public void decryptHandler() {
 
-        System.out.println("Decrypting....");
-        File f = getPath();
-        long[] key = getKey();
-        long[] tweak = getTweak();
+        File fin = getPath();
+        File fout = new File(fin.getParent() + "/encry_" + fin.getName());
 
-        if (f == null || key == null || tweak == null)
-            return; // Bad input, just stop.
+        if (fin.isFile())
+            decryptFile(fin, fout);
+        else if (fin.isDirectory())
+            decryptDir(fin);
+    }
 
+    private void decryptDir(File fin) {
 
-        cipher = new ThreeFish256(key, tweak);
+        Path parent = fin.toPath();
+        String getDecryptedParent =
+                parent.getParent().toAbsolutePath().toString() + "\\decry_" +
+                        parent.getFileName().toString();
 
-        // We should always be a multiple of block size!
-        //
-        long numBytes = f.length();
+        executorService.execute(
+            new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Files.walkFileTree(parent,
+                            new FileVisitor<Path>() {
+                                @Override
+                                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
 
-        // block size, in bytes!
-        //
-        long blockSize = 256 / 8;
-        long numBlocks = numBytes / blockSize;
+                                    String path = parent.relativize(dir).toString();
+                                    System.out.println("File path before: " + path);
+                                    path = path.replaceAll("\\\\", "\\\\decry_");
 
-        long C[];
+                                    if (path.equals(""))
+                                        path = getDecryptedParent;
+                                    else
+                                        path = getDecryptedParent + "\\decry_" + path;
+                                    //System.out.println("File path after: " + getEncryptedParent + "\\" + path);
 
-        byte curBlock[] = new byte[(int)blockSize];
+                                    Path p = Paths.get(path);
+                                    Files.createDirectory(p);
+                                    //System.out.println(dir.toString());
+                                    return FileVisitResult.CONTINUE;
+                                }
 
-        try (
-                FileInputStream fr = new FileInputStream(f.getAbsolutePath());
-                FileOutputStream fo = new FileOutputStream(f.getParent() + "/decrypt_" + f.getName())
-        ) {
+                                @Override
+                                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
 
-            int i, j;
+                                    Path rel = parent.relativize(file);
 
-            // First block is special, it tells us how much padding we have!
-            //
-            fr.read(curBlock);
+                                    String pathOut = "decry_" + rel.toString().replaceAll("\\\\", "\\\\decry_");
+                                    pathOut = getDecryptedParent + "\\" + pathOut;
 
-            long P[];
-            C = bytesToLong(curBlock);
-            P = cipher.decrypt(C);
+                                    File fout = new File(pathOut);
 
-            int padding = ((int)P[0] - 4 * 8) % 32;
-            System.out.println("Padding: " + padding);
+                                    decryptFile(file.toFile(), fout);
+                                    return FileVisitResult.CONTINUE;
+                                }
 
-            // So decrypt the next block and ignore the first (padding) bytes!
-            //
-            byte PBytes[];
-            fr.read(curBlock);
-            long curBlockLong[] = bytesToLong(curBlock);
-            curBlockLong = cipher.decrypt(curBlockLong);
+                                @Override
+                                public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                                    return FileVisitResult.CONTINUE;
+                                }
 
-            for (i = 0; i < 4; i++)
-                P[i] = curBlockLong[i] ^ C[i];
-            PBytes = longToBytes(P);
-            for (i = padding; i < 32; i++) {
-                fo.write(PBytes[i]);
+                                @Override
+                                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                                    return FileVisitResult.CONTINUE;
+                                }
+                            }
+                        );
+                    } catch (Exception e) {
+
+                    }
+                }
             }
+        );
+    }
 
-            // Now we can write the rest as normal;
-            for (i = 2; i < numBlocks; i++) {
+    public void decryptFile(File fin, File fout) {
+        executorService.execute(
+                new Runnable() {
+                    @Override
+                    public void run() {
 
-                // Remember last encrypted text for
-                // XOR.
-                //
-                C = bytesToLong(curBlock);
-                fr.read(curBlock);
+                        if (paths.contains(fin.getPath()))
+                            return;
+                        else
+                            paths.add(fin.getPath());
 
-                curBlockLong = cipher.decrypt(bytesToLong(curBlock));
+                        System.out.println("Decrypting... " + fin.getName());
 
-                for (j = 0; j < 4; j++)
-                    P[j] = curBlockLong[j] ^ C[j];
+                        try {
+                            DataInputStream fr = new DataInputStream(new FileInputStream(fin));
+                            DataOutputStream fw = new DataOutputStream(new FileOutputStream(fout));
 
-                fo.write(longToBytes(P));
-            }
+                            Encryptor encryptor = new Encryptor(getKey(), getTweak(), getBlockSize());
+                            encryptor.decryptHandler(fr, fw, fin.length());
 
-        } catch (Exception e) {
-            errMsg("Error reading file or writing file!\n" + e.toString());
-        }
+                            fr.close();
+                            fw.close();
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            System.out.println(e);
+                            return;
+                        }
+
+                        System.out.println("Decrypted! " + fin.getName());
+                        paths.remove(fin.getPath());
+
+                    }
+                }
+        );
     }
 
     @FXML public void browseHandler () {
 
         pathField.setText(new FileChooser().showOpenDialog(new Stage()).getAbsolutePath());
+    }
+
+    @FXML public void dirHandler() {
+        pathField.setText(new DirectoryChooser().showDialog(new Stage()).getAbsolutePath());
+    }
+
+    private int getBlockSize() {
+        return Integer.parseInt(choiceBox.getValue());
     }
 
     private byte[] longToBytes(long[] longs) {
@@ -261,8 +355,8 @@ public class Controller {
     // Convert the 32 bytes to 4 longs
     private long[] bytesToLong(byte bytes[]) {
 
-        long longs[] = new long[4];
-        for (int i = 0; i < 4; i++) {
+        long longs[] = new long[bytes.length / 8];
+        for (int i = 0; i < longs.length; i++) {
             longs[i] = 0;
             for (int j = 0; j < 8; j++) {
                 longs[i] <<= 8;
@@ -335,34 +429,35 @@ public class Controller {
     }
 
     private long[] getKey() {
-        long key[] = new long[4];
 
         String t1 = keyField1.getText();
         String t2 = keyField2.getText();
         String t3 = keyField3.getText();
         String t4 = keyField4.getText();
 
-        if (t1.length() != 8 || t2.length() != 8 ||
-                t3.length() != 8 || t4.length() != 8) {
+
+        int length = (getBlockSize() / 8 ) / 4;
+        long key[];
+        if (t1.length() != length || t2.length() != length ||
+                t3.length() != length || t4.length() != length) {
             errMsg("Key size not 8 characters long!");
             return null;
         }
 
         try {
+
+            ByteBuffer byteBuffer = ByteBuffer.allocate(getBlockSize() / 8);
             String t1Hex = "", t2Hex = "", t3Hex = "", t4Hex = "";
             for (char ch : t1.toCharArray())
-                t1Hex += getHex((byte)ch);
+                byteBuffer.put((byte)ch);
             for (char ch : t2.toCharArray())
-                t2Hex += getHex((byte)ch);
+                byteBuffer.put((byte)ch);
             for (char ch : t3.toCharArray())
-                t3Hex += getHex((byte)ch);
+                byteBuffer.put((byte)ch);
             for (char ch : t4.toCharArray())
-                t4Hex += getHex((byte)ch);
+                byteBuffer.put((byte)ch);
 
-            key[0] = Long.decode("0x" + t1Hex);
-            key[1] = Long.decode("0x" + t2Hex);
-            key[2] = Long.decode("0x" + t3Hex);
-            key[3] = Long.decode("0x" + t4Hex);
+            key = bytesToLong(byteBuffer.array());
 
         } catch (NumberFormatException ne) {
             errMsg("Illegal character for key.\n" + ne.toString());
