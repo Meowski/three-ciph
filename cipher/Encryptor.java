@@ -185,8 +185,7 @@ public class Encryptor {
                 for (j = 0; j < numLongs; j++)
                     P[j] = curBlockLong[j] ^ C[j];
 
-                for (long l : P)
-                    fw.writeLong(l);
+                fw.write(longToBytes(P));
             }
 
         } catch (Exception e) {

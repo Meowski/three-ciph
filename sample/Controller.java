@@ -1,14 +1,20 @@
 package sample;
 
 import cipher.Encryptor;
+import javafx.application.Platform;
+import javafx.beans.InvalidationListener;
+import javafx.beans.binding.DoubleBinding;
+import javafx.beans.property.DoubleProperty;
+import javafx.beans.property.SimpleDoubleProperty;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableLongValue;
+import javafx.beans.value.ObservableNumberValue;
+import javafx.beans.value.ObservableValue;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
-import javafx.scene.control.Button;
-import javafx.scene.control.ChoiceBox;
-import javafx.scene.control.Label;
-import javafx.scene.control.TextField;
+import javafx.scene.control.*;
 import javafx.scene.layout.HBox;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
@@ -20,10 +26,24 @@ import java.nio.ByteBuffer;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Controller {
+
+    private final int numThreads = 4;
+
+    private LinkedList<Future<Long>> tasks;
+    private AtomicBoolean isBusy;
+
+    private Encryptor encryptor;
 
     @FXML
     Button encryptBtn;
@@ -61,7 +81,7 @@ public class Controller {
     @FXML
     Label keyLabel;
 
-    private ExecutorService executorService;
+    public ExecutorService executorService;
 
     // Before we create a thread, make sure we are not
     // already operating on this file.
@@ -72,7 +92,9 @@ public class Controller {
 
         // Allow 5 threads to run at a time.
         //
-        executorService = Executors.newFixedThreadPool(5);
+        executorService = Executors.newFixedThreadPool(numThreads);
+        isBusy = new AtomicBoolean(false);
+        tasks = new LinkedList<>();
         paths = new ArrayList<>(10);
 
         choiceBox.getSelectionModel().selectedIndexProperty().addListener(
@@ -104,13 +126,61 @@ public class Controller {
 
     @FXML public void encryptHandler() {
 
+        long key[] = getKey();
+        long tweak[] = getTweak();
+
+        if (tweak == null || key == null)
+            return;
+
+        if (!isBusy.compareAndSet(false, true)) {
+            errMsg("Already encrypting or decrypting!");
+            return;
+        }
+
+        encryptor = new Encryptor(key, tweak, getBlockSize());
+
+
         File fin = getPath();
         File fout = new File(fin.getParent() + "/encry_" + fin.getName());
 
         if (fin.isFile())
-            encryptFile(fin, fout);
+            handleProgressIndicator(encryptFile(fin, fout, true));
         else if (fin.isDirectory())
             encryptDir(fin);
+        else
+            isBusy.set(false);
+    }
+
+    private void handleProgressIndicator(Future<Long> toWaitOn) {
+
+        Stage dialogStage;
+        dialogStage = new Stage();
+        ProgressIndicator bar;
+        dialogStage.initModality(Modality.WINDOW_MODAL);
+        dialogStage.setScene(new Scene(bar = new ProgressIndicator()));
+        bar.setPadding(new Insets(5, 5, 5, 5));
+        dialogStage.show();
+
+        Timer timer = new Timer();
+        timer.scheduleAtFixedRate(
+            new TimerTask() {
+                @Override
+                public void run() {
+                    Platform.runLater(
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                System.out.println("We ran (indicator)!");
+
+                                if (toWaitOn.isDone())
+                                    Platform.runLater(
+                                            () -> dialogStage.close()
+                                    );
+                            }
+                        }
+                    );
+                }
+            }, 0, 1000);
     }
 
     private void encryptDir(File fin) {
@@ -120,112 +190,184 @@ public class Controller {
                 parent.getParent().toAbsolutePath().toString() + "\\encry_" +
                         parent.getFileName().toString();
 
-        executorService.execute(
-            new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        Files.walkFileTree(parent,
-                                new FileVisitor<Path>() {
-                                    @Override
-                                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+        final AtomicLong totalSize = new AtomicLong();
+        totalSize.set(0);
 
-                                        String path = parent.relativize(dir).toString();
-                                        System.out.println("File path before: " + path);
-                                        path = path.replaceAll("\\\\", "\\\\encry_");
+        try {
+            Files.walkFileTree(parent,
+                new FileVisitor<Path>() {
 
-                                        if (path.equals(""))
-                                            path = getEncryptedParent;
-                                        else
-                                            path = getEncryptedParent + "\\encry_" + path;
-                                        //System.out.println("File path after: " + getEncryptedParent + "\\" + path);
 
-                                        Path p = Paths.get(path);
-                                        Files.createDirectory(p);
-                                        //System.out.println(dir.toString());
-                                        return FileVisitResult.CONTINUE;
-                                    }
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
 
-                                    @Override
-                                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                        String path = parent.relativize(dir).toString();
+                        System.out.println("File path before: " + path);
+                        path = path.replaceAll("\\\\", "\\\\encry_");
 
-                                        Path rel = parent.relativize(file);
+                        if (path.equals(""))
+                            path = getEncryptedParent;
+                        else
+                            path = getEncryptedParent + "\\encry_" + path;
+                        //System.out.println("File path after: " + getEncryptedParent + "\\" + path);
 
-                                        String pathOut = "encry_" + rel.toString().replaceAll("\\\\", "\\\\encry_");
-                                        pathOut = getEncryptedParent + "\\" + pathOut;
+                        Path p = Paths.get(path);
+                        Files.createDirectory(p);
+                        //System.out.println(dir.toString());
+                        return FileVisitResult.CONTINUE;
+                    }
 
-                                        File fout = new File(pathOut);
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
 
-                                        encryptFile(file.toFile(), fout);
-                                        return FileVisitResult.CONTINUE;
-                                    }
+                        totalSize.getAndAdd(Files.size(file));
+                        Path rel = parent.relativize(file);
 
-                                    @Override
-                                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
-                                        return FileVisitResult.CONTINUE;
-                                    }
+                        String pathOut = "encry_" + rel.toString().replaceAll("\\\\", "\\\\encry_");
+                        pathOut = getEncryptedParent + "\\" + pathOut;
 
-                                    @Override
-                                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                                        return FileVisitResult.CONTINUE;
-                                    }
-                                }
-                        );
-                    } catch (Exception e) {
+                        File fout = new File(pathOut);
 
+                        tasks.add(encryptFile(file.toFile(), fout, false));
+
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+
+                        return FileVisitResult.CONTINUE;
                     }
                 }
-            }
-        );
-    }
+            );
 
-    private void encryptFile(File fin, File fout) {
+        } catch (Exception e) { System.err.println(e.toString());}
 
-        executorService.execute(
+        // Setup the progress bar!
+        //
+        Stage dialogStage = new Stage();
+        ProgressBar bar;
+        dialogStage.initModality(Modality.WINDOW_MODAL);
+        dialogStage.setScene(new Scene( bar = new ProgressBar()));
+        bar.setPadding(new Insets(5, 5, 5, 5));
+        dialogStage.show();
+
+        AtomicLong along = new AtomicLong();
+        along.set(0);
+        new Thread(
                 new Runnable() {
                     @Override
                     public void run() {
-
-                        if (paths.contains(fin.getPath())) {
-                            System.err.println("already working on file: " + fin.getPath());
-                            return;
-                        }
-                        else
-                            paths.add(fin.getPath());
-
-                        System.out.println("Encrypting... " + fin.getName());
-
-                        try {
-                            DataInputStream fr = new DataInputStream(new FileInputStream(fin));
-                            DataOutputStream fw = new DataOutputStream(new FileOutputStream(fout));
-
-                            Encryptor encryptor = new Encryptor(getKey(), getTweak(), getBlockSize());
-                            encryptor.encryptHandler(fr, fw, fin.length());
-
-                            fr.close();
-                            fw.close();
-
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                            System.out.println(e);
-                            return;
-                        }
-
-                        System.out.println("Encrypted! " + fin.getName());
-                        paths.remove(fin.getPath());
+                        for (Future<Long> task : tasks)
+                            try {
+                                along.getAndAdd(task.get());
+                            } catch (Exception e) { System.err.println(e.toString());}
                     }
-                });
+                }
+        ).start();
+
+        Timer timer = new Timer();
+        timer.scheduleAtFixedRate(
+            new TimerTask() {
+                @Override
+                public void run() {
+                    Platform.runLater(
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                System.out.println("We ran!");
+                                bar.setProgress(along.get() / (double)totalSize.get());
+
+                                // We are done, so cancel the timer and close
+                                // the dialog!
+                                //
+                                if (along.get() == totalSize.get()) {
+                                    dialogStage.close();
+                                    isBusy.set(false);
+                                    tasks.clear();
+                                    timer.cancel();
+                                }
+                            }
+                        }
+                    );
+                }
+            }, 0, 5000);
+    }
+
+    // If we are only encrypting a single file, set onlyOneFile so we release
+    // the "lock" on our atomic boolean.
+    //
+    private Future<Long> encryptFile(File fin, File fout, boolean onlyOneFile) {
+
+        return executorService.submit(
+            new Callable<Long>() {
+                @Override
+                public Long call() {
+
+                    if (paths.contains(fin.getPath())) {
+                        System.err.println("already working on file: " + fin.getPath());
+                        return 0L;
+                    }
+                    else
+                        paths.add(fin.getPath());
+
+                    // System.out.println("Encrypting... " + fin.getName());
+
+                    try {
+                        DataInputStream fr = new DataInputStream(new FileInputStream(fin));
+                        DataOutputStream fw = new DataOutputStream(new FileOutputStream(fout));
+
+                        encryptor.encryptHandler(fr, fw, fin.length());
+
+                        fr.close();
+                        fw.close();
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        System.out.println(e);
+                        return 0L;
+                    }
+
+                    // System.out.println("Encrypted! " + fin.getName());
+                    paths.remove(fin.getPath());
+
+                    if (onlyOneFile)
+                        isBusy.set(false);
+
+                    return fin.length();
+                }
+            });
     }
 
     @FXML public void decryptHandler() {
 
+        long key[] = getKey();
+        long tweak[] = getTweak();
+
+        if (tweak == null || key == null)
+            return;
+
+        if (!isBusy.compareAndSet(false, true)) {
+            errMsg("Already encrypting or decrypting!");
+            return;
+        }
+
+        encryptor = new Encryptor(key, tweak, getBlockSize());
+
         File fin = getPath();
-        File fout = new File(fin.getParent() + "/encry_" + fin.getName());
+        File fout = new File(fin.getParent() + "/decry_" + fin.getName());
 
         if (fin.isFile())
-            decryptFile(fin, fout);
+            handleProgressIndicator(decryptFile(fin, fout, true));
         else if (fin.isDirectory())
             decryptDir(fin);
+        else
+            isBusy.set(false);
     }
 
     private void decryptDir(File fin) {
@@ -235,98 +377,153 @@ public class Controller {
                 parent.getParent().toAbsolutePath().toString() + "\\decry_" +
                         parent.getFileName().toString();
 
-        executorService.execute(
+        final AtomicLong totalSize = new AtomicLong();
+        totalSize.set(0);
+
+        try {
+            Files.walkFileTree(parent,
+                new FileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+
+                        String path = parent.relativize(dir).toString();
+                        // System.out.println("File path before: " + path);
+                        path = path.replaceAll("\\\\", "\\\\decry_");
+
+                        if (path.equals(""))
+                            path = getDecryptedParent;
+                        else
+                            path = getDecryptedParent + "\\decry_" + path;
+                        //System.out.println("File path after: " + getEncryptedParent + "\\" + path);
+
+                        Path p = Paths.get(path);
+                        Files.createDirectory(p);
+                        //System.out.println(dir.toString());
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+
+                        totalSize.getAndAdd(Files.size(file));
+
+                        Path rel = parent.relativize(file);
+
+                        String pathOut = "decry_" + rel.toString().replaceAll("\\\\", "\\\\decry_");
+                        pathOut = getDecryptedParent + "\\" + pathOut;
+
+                        File fout = new File(pathOut);
+
+                        tasks.add(decryptFile(file.toFile(), fout, false));
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+                }
+            );
+        } catch (Exception e) { System.err.println(e.toString());}
+
+        // Setup the progress bar!
+        //
+        Stage dialogStage = new Stage();
+        ProgressBar bar;
+        dialogStage.initModality(Modality.WINDOW_MODAL);
+        dialogStage.setScene(new Scene( bar = new ProgressBar()));
+        bar.setPadding(new Insets(5, 5, 5, 5));
+        dialogStage.show();
+
+        AtomicLong along = new AtomicLong();
+        along.set(0);
+        new Thread(
             new Runnable() {
                 @Override
                 public void run() {
-                    try {
-                        Files.walkFileTree(parent,
-                            new FileVisitor<Path>() {
-                                @Override
-                                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-
-                                    String path = parent.relativize(dir).toString();
-                                    System.out.println("File path before: " + path);
-                                    path = path.replaceAll("\\\\", "\\\\decry_");
-
-                                    if (path.equals(""))
-                                        path = getDecryptedParent;
-                                    else
-                                        path = getDecryptedParent + "\\decry_" + path;
-                                    //System.out.println("File path after: " + getEncryptedParent + "\\" + path);
-
-                                    Path p = Paths.get(path);
-                                    Files.createDirectory(p);
-                                    //System.out.println(dir.toString());
-                                    return FileVisitResult.CONTINUE;
-                                }
-
-                                @Override
-                                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-
-                                    Path rel = parent.relativize(file);
-
-                                    String pathOut = "decry_" + rel.toString().replaceAll("\\\\", "\\\\decry_");
-                                    pathOut = getDecryptedParent + "\\" + pathOut;
-
-                                    File fout = new File(pathOut);
-
-                                    decryptFile(file.toFile(), fout);
-                                    return FileVisitResult.CONTINUE;
-                                }
-
-                                @Override
-                                public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
-                                    return FileVisitResult.CONTINUE;
-                                }
-
-                                @Override
-                                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                                    return FileVisitResult.CONTINUE;
-                                }
-                            }
-                        );
-                    } catch (Exception e) {
-
-                    }
+                    System.out.printf("Number of tasks: %d\n", tasks.size());
+                    for (Future<Long> task : tasks)
+                        try {
+                            along.getAndAdd(task.get());
+                        } catch (Exception e) { System.err.println(e.toString());}
                 }
             }
-        );
+        ).start();
+
+        Timer timer = new Timer();
+        timer.scheduleAtFixedRate(
+            new TimerTask() {
+                @Override
+                public void run() {
+                    Platform.runLater(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    System.out.println("We ran!");
+                                    bar.setProgress(along.get() / (double)totalSize.get());
+
+                                    // We are done, so cancel the timer and close
+                                    // the dialog!
+                                    //
+                                    if (along.get() == totalSize.get()) {
+                                        dialogStage.close();
+                                        isBusy.set(false);
+                                        tasks.clear();
+                                        timer.cancel();
+                                    }
+                                }
+                            }
+                    );
+                }
+            }, 0, 5000);
     }
 
-    public void decryptFile(File fin, File fout) {
-        executorService.execute(
-                new Runnable() {
-                    @Override
-                    public void run() {
+    // If we are only decrypting a single file, set onlyOneFile so we release
+    // the "lock" on our atomic boolean.
+    //
+    public Future<Long> decryptFile(File fin, File fout, boolean onlyOneFile) {
 
-                        if (paths.contains(fin.getPath()))
-                            return;
-                        else
-                            paths.add(fin.getPath());
+        return executorService.submit(
+            new Callable<Long>() {
+                @Override
+                public Long call() {
 
-                        System.out.println("Decrypting... " + fin.getName());
+                    if (paths.contains(fin.getPath()))
+                        return 0L;
+                    else
+                        paths.add(fin.getPath());
 
-                        try {
-                            DataInputStream fr = new DataInputStream(new FileInputStream(fin));
-                            DataOutputStream fw = new DataOutputStream(new FileOutputStream(fout));
+                    // System.out.println("Decrypting... " + fin.getName());
 
-                            Encryptor encryptor = new Encryptor(getKey(), getTweak(), getBlockSize());
-                            encryptor.decryptHandler(fr, fw, fin.length());
+                    try {
+                        DataInputStream fr = new DataInputStream(new FileInputStream(fin));
+                        DataOutputStream fw = new DataOutputStream(new FileOutputStream(fout));
 
-                            fr.close();
-                            fw.close();
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                            System.out.println(e);
-                            return;
-                        }
+                        encryptor.decryptHandler(fr, fw, fin.length());
 
-                        System.out.println("Decrypted! " + fin.getName());
-                        paths.remove(fin.getPath());
-
+                        fr.close();
+                        fw.close();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        System.out.println(e);
+                        return 0L;
                     }
+
+                    // System.out.println("Decrypted! " + fin.getName());
+                    paths.remove(fin.getPath());
+
+                    if (onlyOneFile)
+                        isBusy.set(false);
+
+
+                    return fin.length();
                 }
+            }
         );
     }
 
