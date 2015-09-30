@@ -1,0 +1,1 @@
+This is an educational project to try my hand at implementing the threefish cipher described in the paper (http://www.skein-hash.info/sites/default/files/skein1.1.pdf) while also testing Java's new JavaFX GUI platform (goodbye, Swing).
