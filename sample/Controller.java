@@ -2,14 +2,6 @@ package sample;
 
 import cipher.Encryptor;
 import javafx.application.Platform;
-import javafx.beans.InvalidationListener;
-import javafx.beans.binding.DoubleBinding;
-import javafx.beans.property.DoubleProperty;
-import javafx.beans.property.SimpleDoubleProperty;
-import javafx.beans.value.ChangeListener;
-import javafx.beans.value.ObservableLongValue;
-import javafx.beans.value.ObservableNumberValue;
-import javafx.beans.value.ObservableValue;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -172,10 +164,13 @@ public class Controller {
                             public void run() {
                                 System.out.println("We ran (indicator)!");
 
-                                if (toWaitOn.isDone())
+                                if (toWaitOn.isDone()) {
+
                                     Platform.runLater(
                                             () -> dialogStage.close()
                                     );
+                                    timer.cancel();
+                                }
                             }
                         }
                     );
@@ -498,7 +493,7 @@ public class Controller {
                     else
                         paths.add(fin.getPath());
 
-                    // System.out.println("Decrypting... " + fin.getName());
+                    System.out.println("Decrypting... " + fin.getName());
 
                     try {
                         DataInputStream fr = new DataInputStream(new FileInputStream(fin));
@@ -514,12 +509,11 @@ public class Controller {
                         return 0L;
                     }
 
-                    // System.out.println("Decrypted! " + fin.getName());
+                    System.out.println("Decrypted! " + fin.getName());
                     paths.remove(fin.getPath());
 
                     if (onlyOneFile)
                         isBusy.set(false);
-
 
                     return fin.length();
                 }

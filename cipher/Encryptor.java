@@ -9,7 +9,6 @@ import java.util.Random;
  */
 public class Encryptor {
 
-
     // Will get initialized when we encrypt or decrypt.
     //
     private ThreeFish cipher;
@@ -122,8 +121,6 @@ public class Encryptor {
             System.err.println("Error reading / writing to file!\n" + e.toString());
             throw e;
         }
-
-
     }
 
     public void decryptHandler(DataInputStream fr, DataOutputStream fw, long numBytes) {
@@ -189,6 +186,10 @@ public class Encryptor {
             }
 
         } catch (Exception e) {
+            System.err.println("Error decrypting!");
+            System.err.println("Did you give the correct key?");
+            System.err.println(e);
+            e.printStackTrace();
             //errMsg("Error reading file or writing file!\n" + e.toString());
         }
     }

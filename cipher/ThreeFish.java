@@ -1,8 +1,5 @@
 package cipher;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-
 /**
  * Created by Meowington on 8/17/2015.
  */
